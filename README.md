@@ -59,6 +59,14 @@ deploy/         systemd unit (nxiiot-gateway.service)
 
 Runs natively under systemd (not Docker — needed for `/dev/rtc0` and real `nmcli`). See `deploy/nxiiot-gateway.service` for the reference unit.
 
+`nxiiot-gateway.service` points at `/opt/nxiiot-gateway`, but on a device where `/` is small/shared with other things (e.g. the MaxGate400 — its root partition was already at 77% used from unrelated Docker images, tripping `storage_level: WARNING` even though this install is ~19MB), check for a separate data partition first (`df -h`, `cat /etc/fstab`) and install there instead, with `/opt/nxiiot-gateway` left as a symlink to it — the systemd unit and everything below then need zero changes:
+
+```bash
+# only if / is tight and a roomier partition exists (e.g. /userdata) — check first, don't assume
+mkdir -p /userdata/nxiiot-gateway
+ln -s /userdata/nxiiot-gateway /opt/nxiiot-gateway
+```
+
 ```bash
 # On the target device
 git pull   # or otherwise sync this repo
