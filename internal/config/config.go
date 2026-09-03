@@ -25,6 +25,11 @@ type GatewayConfig struct {
 
 type APIConfig struct {
 	ListenAddr string `yaml:"listen_addr"`
+	// StaticDir, if set, serves the built web/ frontend (vite build output)
+	// for any request that doesn't match an /api route, on the same
+	// listener/port as the REST API — avoids CORS and needs no separate
+	// reverse proxy. Empty (default) disables static serving entirely.
+	StaticDir string `yaml:"static_dir"`
 }
 
 type DatabaseConfig struct {

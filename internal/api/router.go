@@ -108,6 +108,14 @@ func NewRouter(cfg *config.Config, configPath string, db *sql.DB, log *slog.Logg
 		r.Post("/system/network/confirm", s.confirmNetwork)
 	})
 
+	// Static web UI (opt-in): the frontend has no client-side routing (no
+	// react-router — see web/src/App.tsx, a single tab-state SPA), so a
+	// plain FileServer with no index.html fallback for unmatched paths is
+	// sufficient. Mounted after /api so it never shadows an API route.
+	if cfg.API.StaticDir != "" {
+		r.Handle("/*", http.FileServer(http.Dir(cfg.API.StaticDir)))
+	}
+
 	return r
 }
 
