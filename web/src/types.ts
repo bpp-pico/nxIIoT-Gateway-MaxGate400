@@ -152,6 +152,10 @@ export interface ConfigImportResult {
 export interface Settings {
   gateway: { id: string; name: string }
   mqtt: {
+    // Optional: absent when talking to a gateway build from before this
+    // field existed (see the queue? comment below for why that's a real
+    // possibility here). Defaults to "mqtt" when missing.
+    transport?: string
     broker_url: string
     client_id: string
     username?: string

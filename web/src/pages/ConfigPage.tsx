@@ -41,7 +41,10 @@ export function ConfigPage() {
 // Once loaded, queue is always normalized to a concrete value (see the
 // getSettings().then below) even though the wire type leaves it optional
 // for backward compatibility with older gateway builds.
-type LoadedSettings = Settings & { queue: NonNullable<Settings['queue']> }
+type LoadedSettings = Settings & {
+  queue: NonNullable<Settings['queue']>
+  mqtt: Settings['mqtt'] & { transport: string }
+}
 
 function SettingsSection() {
   const [settings, setSettings] = useState<LoadedSettings | null>(null)
@@ -54,7 +57,9 @@ function SettingsSection() {
       .getSettings()
       // Default queue.retention_days when talking to an older gateway build
       // that doesn't send it yet, so the form always has a value to show.
-      .then((s) => setSettings({ ...s, queue: s.queue ?? { retention_days: 30 } }))
+      .then((s) =>
+        setSettings({ ...s, queue: s.queue ?? { retention_days: 30 }, mqtt: { ...s.mqtt, transport: s.mqtt.transport ?? 'mqtt' } }),
+      )
       .catch((err) => setError(String(err instanceof Error ? err.message : err)))
   }, [])
 
@@ -142,6 +147,23 @@ function SettingsSection() {
 
         <div style={styles.card}>
           <div style={styles.cardTitle}>MQTT Server</div>
+          <div style={styles.formRow}>
+            <label style={styles.label}>Transport</label>
+            <select
+              style={styles.select}
+              value={settings.mqtt.transport}
+              onChange={(e) => setSettings({ ...settings, mqtt: { ...settings.mqtt, transport: e.target.value } })}
+            >
+              <option value="mqtt">MQTT (production)</option>
+              <option value="http">HTTP (dev/test only)</option>
+            </select>
+          </div>
+          {settings.mqtt.transport === 'mqtt' && (
+            <p style={{ ...styles.muted, marginTop: -8 }}>
+              Warning: if Broker URL below is wrong or unreachable, the gateway will fail to start after saving —
+              including this web UI, since it's served by the same process. Double-check it before saving.
+            </p>
+          )}
           <div style={styles.formRow}>
             <label style={styles.label}>Broker URL</label>
             <input

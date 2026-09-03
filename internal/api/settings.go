@@ -21,6 +21,11 @@ type settingsDTO struct {
 		Name string `json:"name"`
 	} `json:"gateway"`
 	MQTT struct {
+		// Transport selects forwarder.transport ("http" or "mqtt" - see
+		// config.ForwarderConfig). Exposed here, not as its own section,
+		// since it's meaningless without the MQTT fields alongside it in
+		// the same form.
+		Transport string `json:"transport"`
 		BrokerURL string `json:"broker_url"`
 		ClientID  string `json:"client_id"`
 		Username  string `json:"username,omitempty"`
@@ -70,6 +75,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	var dto settingsDTO
 	dto.Gateway.ID = s.cfg.Gateway.ID
 	dto.Gateway.Name = s.cfg.Gateway.Name
+	dto.MQTT.Transport = s.cfg.Forwarder.Transport
 	dto.MQTT.BrokerURL = s.cfg.MQTT.BrokerURL
 	dto.MQTT.ClientID = s.cfg.MQTT.ClientID
 	dto.MQTT.Username = s.cfg.MQTT.Username
@@ -108,9 +114,16 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mqtt.broker_url is required")
 		return
 	}
+	switch dto.MQTT.Transport {
+	case "http", "mqtt":
+	default:
+		writeError(w, http.StatusBadRequest, `transport must be "http" or "mqtt"`)
+		return
+	}
 
 	s.cfg.Gateway.ID = dto.Gateway.ID
 	s.cfg.Gateway.Name = dto.Gateway.Name
+	s.cfg.Forwarder.Transport = dto.MQTT.Transport
 	s.cfg.MQTT.BrokerURL = dto.MQTT.BrokerURL
 	s.cfg.MQTT.ClientID = dto.MQTT.ClientID
 	s.cfg.MQTT.Username = dto.MQTT.Username
