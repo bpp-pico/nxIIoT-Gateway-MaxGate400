@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"os"
 
@@ -105,6 +107,41 @@ type MQTTTLSConfig struct {
 	CertFile           string `yaml:"cert_file"`
 	KeyFile            string `yaml:"key_file"`
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
+}
+
+// BuildMQTTTLSConfig resolves a MQTTTLSConfig's file paths into a real
+// *tls.Config, nil when TLS is disabled. Shared by cmd/gateway/adapter.go
+// (the production connect path) and internal/api/settings.go (the
+// Settings-page live test-connect) so there's exactly one implementation
+// to keep correct rather than two that can drift.
+func BuildMQTTTLSConfig(cfg MQTTTLSConfig) (*tls.Config, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+
+	tlsConfig := &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify}
+
+	if cfg.CAFile != "" {
+		pem, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read ca_file: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("ca_file %s contains no valid certificates", cfg.CAFile)
+		}
+		tlsConfig.RootCAs = pool
+	}
+
+	if cfg.CertFile != "" || cfg.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load client certificate: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+
+	return tlsConfig, nil
 }
 
 // TimeConfig configures the Time Service (Phase 6, §11-§14). NTPServer

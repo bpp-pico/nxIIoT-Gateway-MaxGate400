@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"nxiiot-gateway/internal/config"
+	"nxiiot-gateway/internal/forwarder"
 )
 
 // settingsDTO covers the config.yaml fields the user asked to edit from
@@ -102,6 +104,68 @@ func normalizeBrokerURL(raw string) (string, error) {
 	return s, nil
 }
 
+// testMQTTConnect attempts a real, short-lived connect to the broker about
+// to be saved, using a client ID distinct from the one about to go live -
+// never the same ID, since brokers commonly enforce "last connection
+// wins" per client ID and a same-ID test would briefly kick the currently
+// running production connection. Returns nil immediately for anything
+// other than a StoreForward-enabled, mqtt-transport save (an http save,
+// or a disabled Store & Forward, never attempts a broker connection at
+// startup either - see main.go/adapter.go - so there's nothing to test).
+//
+// This exists because normalizeBrokerURL only catches a value that can't
+// even parse as a URL - a syntactically valid but wrong or unreachable
+// broker (typo'd host, broker not actually listening, bad credentials)
+// sails through that check, gets saved, and fails at the *next* restart
+// exactly like the incident normalizeBrokerURL was built for: fatal at
+// startup (cmd/gateway/adapter.go), crash-looping the whole gateway
+// including the web UI used to fix it. See MEMORY.md's 2026-09-03/04
+// entries for the real incident and the deliberate decision (after
+// experiencing that cost) to add this live check rather than rely on
+// syntax validation alone.
+func (s *Server) testMQTTConnect(cfg config.MQTTConfig, transport string) error {
+	if transport != "mqtt" {
+		return nil
+	}
+
+	tlsConfig, err := config.BuildMQTTTLSConfig(cfg.TLS)
+	if err != nil {
+		return fmt.Errorf("tls config: %w", err)
+	}
+
+	timeout := time.Duration(cfg.ConnectTimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+
+	testClientID := cfg.ClientID
+	if testClientID == "" {
+		testClientID = "gateway"
+	}
+	testClientID = fmt.Sprintf("%s-settings-test-%d", testClientID, time.Now().UnixNano())
+
+	adapter := forwarder.NewMQTTAdapter(forwarder.MQTTAdapterConfig{
+		BrokerURL:      cfg.BrokerURL,
+		ClientID:       testClientID,
+		Username:       cfg.Username,
+		Password:       cfg.Password,
+		QoS:            byte(cfg.QoS),
+		DataTopic:      cfg.DataTopic,
+		AckTopic:       cfg.AckTopic,
+		KeepAlive:      time.Duration(cfg.KeepAliveSec) * time.Second,
+		ConnectTimeout: timeout,
+		TLS:            tlsConfig,
+	}, s.log)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := adapter.Connect(ctx); err != nil {
+		return fmt.Errorf("could not connect to MQTT broker %s: %w", cfg.BrokerURL, err)
+	}
+	adapter.Disconnect(250)
+	return nil
+}
+
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	var dto settingsDTO
 	dto.Gateway.ID = s.cfg.Gateway.ID
@@ -164,35 +228,49 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.cfg.Gateway.ID = dto.Gateway.ID
-	s.cfg.Gateway.Name = dto.Gateway.Name
-	s.cfg.StoreForward.Disabled = !dto.StoreForward.Enabled
-	s.cfg.Forwarder.Transport = dto.MQTT.Transport
+	// Build the effective MQTT config this save would produce without
+	// mutating s.cfg yet, so it can be live-tested first (below) and only
+	// actually committed if the test passes - never leaving s.cfg/disk in
+	// a half-applied state on a rejected save.
+	newMQTT := s.cfg.MQTT
 	if dto.StoreForward.Enabled {
-		s.cfg.MQTT.BrokerURL = brokerURL
+		newMQTT.BrokerURL = brokerURL
 	} else {
 		// Not validated above (moot while disabled) - still trim so a
 		// stray space doesn't linger in config.yaml waiting to bite if
 		// Store & Forward is re-enabled later without touching this field.
-		s.cfg.MQTT.BrokerURL = strings.TrimSpace(dto.MQTT.BrokerURL)
+		newMQTT.BrokerURL = strings.TrimSpace(dto.MQTT.BrokerURL)
 	}
-	s.cfg.MQTT.ClientID = dto.MQTT.ClientID
-	s.cfg.MQTT.Username = dto.MQTT.Username
+	newMQTT.ClientID = dto.MQTT.ClientID
+	newMQTT.Username = dto.MQTT.Username
 	if dto.MQTT.Password != "" {
-		s.cfg.MQTT.Password = dto.MQTT.Password
+		newMQTT.Password = dto.MQTT.Password
 	}
 	if dto.MQTT.QoS > 0 {
-		s.cfg.MQTT.QoS = dto.MQTT.QoS
+		newMQTT.QoS = dto.MQTT.QoS
 	}
 	if dto.MQTT.DataTopic != "" {
-		s.cfg.MQTT.DataTopic = dto.MQTT.DataTopic
+		newMQTT.DataTopic = dto.MQTT.DataTopic
 	}
 	if dto.MQTT.AckTopic != "" {
-		s.cfg.MQTT.AckTopic = dto.MQTT.AckTopic
+		newMQTT.AckTopic = dto.MQTT.AckTopic
 	}
 	if dto.MQTT.KeepAliveSec > 0 {
-		s.cfg.MQTT.KeepAliveSec = dto.MQTT.KeepAliveSec
+		newMQTT.KeepAliveSec = dto.MQTT.KeepAliveSec
 	}
+
+	if dto.StoreForward.Enabled {
+		if err := s.testMQTTConnect(newMQTT, dto.MQTT.Transport); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	s.cfg.Gateway.ID = dto.Gateway.ID
+	s.cfg.Gateway.Name = dto.Gateway.Name
+	s.cfg.StoreForward.Disabled = !dto.StoreForward.Enabled
+	s.cfg.Forwarder.Transport = dto.MQTT.Transport
+	s.cfg.MQTT = newMQTT
 	ntpServer, err := normalizeNTPServer(dto.Time.NTPServer)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

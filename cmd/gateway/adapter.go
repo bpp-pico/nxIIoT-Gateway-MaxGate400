@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"nxiiot-gateway/internal/config"
@@ -26,7 +23,7 @@ func buildAdapter(ctx context.Context, cfg *config.Config, log *slog.Logger) (fo
 		return adapter, func() {}, nil
 
 	case "mqtt":
-		tlsConfig, err := buildMQTTTLSConfig(cfg.MQTT.TLS)
+		tlsConfig, err := config.BuildMQTTTLSConfig(cfg.MQTT.TLS)
 		if err != nil {
 			return nil, nil, fmt.Errorf("mqtt tls config: %w", err)
 		}
@@ -63,34 +60,4 @@ func buildAdapter(ctx context.Context, cfg *config.Config, log *slog.Logger) (fo
 	default:
 		return nil, nil, fmt.Errorf("unknown forwarder transport %q (want \"http\" or \"mqtt\")", cfg.Forwarder.Transport)
 	}
-}
-
-func buildMQTTTLSConfig(cfg config.MQTTTLSConfig) (*tls.Config, error) {
-	if !cfg.Enabled {
-		return nil, nil
-	}
-
-	tlsConfig := &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify}
-
-	if cfg.CAFile != "" {
-		pem, err := os.ReadFile(cfg.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read ca_file: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("ca_file %s contains no valid certificates", cfg.CAFile)
-		}
-		tlsConfig.RootCAs = pool
-	}
-
-	if cfg.CertFile != "" || cfg.KeyFile != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("load client certificate: %w", err)
-		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
-	}
-
-	return tlsConfig, nil
 }

@@ -186,8 +186,9 @@ function SettingsSection() {
           </div>
           {settings.mqtt.transport === 'mqtt' && (
             <p style={{ ...styles.muted, marginTop: -8 }}>
-              Warning: if Broker URL below is wrong or unreachable, the gateway will fail to start after saving —
-              including this web UI, since it's served by the same process. Double-check it before saving.
+              Saving with MQTT selected briefly connects to Broker URL below to confirm it's reachable before writing
+              anything — if it can't connect, the save is rejected with an error and nothing changes. (A broker that
+              goes down later can still cause a restart failure — this only checks reachability at save time.)
             </p>
           )}
           <div style={styles.formRow}>
