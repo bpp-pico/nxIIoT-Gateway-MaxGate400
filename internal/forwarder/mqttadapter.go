@@ -78,9 +78,18 @@ type MQTTAdapter struct {
 	cfg    MQTTAdapterConfig
 	log    *slog.Logger
 
-	mu             sync.Mutex
-	pending        map[string]chan mqttAck
-	disconnectedAt time.Time // zero value means "currently connected"
+	mu      sync.Mutex
+	pending map[string]chan mqttAck
+	// disconnectedAt is zero only in the instant right after onConnect
+	// fires — NewMQTTAdapter sets it to time.Now() immediately so a fresh
+	// client that has never connected at all counts as disconnected from
+	// construction, not as the zero value's naive reading of "connected".
+	// Getting this wrong is what let a never-successfully-connected client
+	// slip past checkAndForceReconnect's IsZero() check forever (see
+	// RunReconnectWatchdog's doc comment and MEMORY.md's 2026-09-0X entry
+	// on the initial-connect-fatal fix this enables) — the watchdog only
+	// ever exercised the "was connected, then lost it" path before.
+	disconnectedAt time.Time
 }
 
 func NewMQTTAdapter(cfg MQTTAdapterConfig, log *slog.Logger) *MQTTAdapter {
@@ -90,7 +99,7 @@ func NewMQTTAdapter(cfg MQTTAdapterConfig, log *slog.Logger) *MQTTAdapter {
 	if cfg.ReconnectStuckAfter <= 0 {
 		cfg.ReconnectStuckAfter = defaultReconnectStuckAfter
 	}
-	a := &MQTTAdapter{cfg: cfg, log: log, pending: make(map[string]chan mqttAck)}
+	a := &MQTTAdapter{cfg: cfg, log: log, pending: make(map[string]chan mqttAck), disconnectedAt: time.Now()}
 
 	opts := mqtt.NewClientOptions().
 		AddBroker(cfg.BrokerURL).

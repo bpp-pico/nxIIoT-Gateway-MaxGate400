@@ -13,9 +13,22 @@ import (
 // buildAdapter selects the forwarder.Adapter named by cfg.Forwarder.Transport
 // (§15: the transport must be swappable behind forwarder.Adapter without
 // touching the state machine) and returns a cleanup func to release it on
-// shutdown. For "mqtt" this also performs the initial Connect — a failure
-// here is fatal at startup rather than silently falling back, since a
-// gateway silently not forwarding is worse than one that fails loudly.
+// shutdown. For "mqtt" this also attempts the initial Connect, but a
+// failure there is NOT fatal (changed 2026-09-04 — see MEMORY.md): it used
+// to os.Exit(1), which took down Modbus acquisition and the API/web UI
+// along with forwarding, for as long as the broker stayed wrong or
+// unreachable — a real ~5 hour production outage happened this way twice
+// in the same session, once from a malformed broker_url and once from
+// the class of bug this change targets (a syntactically valid but
+// unreachable broker). Rule 1 ("acquisition never depends on the server")
+// already covers a broker going down *after* a successful connect; this
+// closes the one remaining gap where it didn't apply — the very first
+// connect attempt. A failed initial connect now just logs a warning and
+// falls through to the same success path: RunReconnectWatchdog (started
+// below either way) picks it up from there, exactly as it already does
+// for a connection lost after a successful start. Only genuinely
+// unrecoverable-by-waiting errors (bad TLS config, an unrecognized
+// transport string) remain fatal below.
 func buildAdapter(ctx context.Context, cfg *config.Config, log *slog.Logger) (forwarder.Adapter, func(), error) {
 	switch cfg.Forwarder.Transport {
 	case "", "http":
@@ -46,7 +59,11 @@ func buildAdapter(ctx context.Context, cfg *config.Config, log *slog.Logger) (fo
 		connectCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.MQTT.ConnectTimeoutMs)*time.Millisecond)
 		defer cancel()
 		if err := adapter.Connect(connectCtx); err != nil {
-			return nil, nil, fmt.Errorf("connect to mqtt broker %s: %w", cfg.MQTT.BrokerURL, err)
+			// Not fatal — see the doc comment above. paho's own
+			// SetConnectRetry keeps trying in the background regardless of
+			// whether we waited for it here, and RunReconnectWatchdog
+			// (started below) will force a reconnect if that stalls too.
+			log.Warn("initial mqtt connect failed, gateway is starting anyway and will keep retrying in the background", "broker", cfg.MQTT.BrokerURL, "error", err)
 		}
 
 		// ctx (not connectCtx, which is cancelled right after Connect

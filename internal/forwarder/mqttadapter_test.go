@@ -234,6 +234,77 @@ func TestMQTTAdapterSendFailsWhenAckNeverArrives(t *testing.T) {
 // event), and stays disconnected past ReconnectStuckAfter. The watchdog
 // must notice and force a reconnect attempt rather than trusting paho's
 // own AutoReconnect indefinitely.
+// TestMQTTAdapterWatchdogActsOnAClientThatNeverConnected guards the
+// 2026-09-04 fix enabling cmd/gateway/adapter.go's initial-connect-not-
+// fatal change (see MEMORY.md): before it, disconnectedAt's zero Go value
+// was misread by checkAndForceReconnect as "currently connected" for any
+// client that had never once connected (onConnectionLost, the only other
+// place that set it, never fires for a connect that never succeeded in the
+// first place) — so the watchdog silently took no action for a client
+// stuck in exactly that state, no matter how long you waited.
+// NewMQTTAdapter now initializes disconnectedAt to time.Now() so this
+// state is indistinguishable from "was connected, then lost it" as far as
+// the watchdog is concerned.
+//
+// Matches TestMQTTAdapterWatchdogForcesReconnectWhenStuckPastThreshold's
+// assertion style (a log line, not necessarily full reconnection) rather
+// than asserting IsConnected() — paho's own Connect() spawns its own
+// internal retry loop on a hardcoded 5s ConnectRetryInterval
+// (client.go's RETRYCONN, independent of this watchdog) regardless of
+// whether this fix exists, so actually reaching "connected" within a
+// short test deadline isn't a reliable signal of *this* fix specifically;
+// the watchdog even noticing and attempting to act (the log line) is.
+func TestMQTTAdapterWatchdogActsOnAClientThatNeverConnected(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve free port: %v", err)
+	}
+	addr := l.Addr().String()
+	l.Close() // freed; nothing ever listens here in this test
+
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	adapter := forwarder.NewMQTTAdapter(forwarder.MQTTAdapterConfig{
+		BrokerURL:           "tcp://" + addr,
+		ClientID:            "GW001-never-connected-test",
+		QoS:                 1,
+		DataTopic:           "gateway/GW001/data",
+		AckTopic:            "gateway/GW001/ack",
+		KeepAlive:           10 * time.Second,
+		ConnectTimeout:      200 * time.Millisecond,
+		PublishTimeout:      time.Second,
+		AckTimeout:          time.Second,
+		WatchdogInterval:    30 * time.Millisecond,
+		ReconnectStuckAfter: 100 * time.Millisecond,
+	}, logger)
+
+	// Mirrors buildAdapter's new behavior exactly: the initial Connect
+	// fails and that failure is deliberately ignored (not fatal), same as
+	// production now does. onConnect/onConnectionLost never fire either
+	// way — this client has never once been connected.
+	connectCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_ = adapter.Connect(connectCtx)
+	cancel()
+	if adapter.IsConnected() {
+		t.Fatal("expected the initial connect against an empty port to fail")
+	}
+
+	watchdogCtx, stopWatchdog := context.WithCancel(context.Background())
+	defer stopWatchdog()
+	defer adapter.Disconnect(100)
+	go adapter.RunReconnectWatchdog(watchdogCtx)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(logBuf.String(), "forcing reconnect") {
+			return // watchdog noticed a never-connected client and acted — test passes
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expected the watchdog to act on a client that had never connected within 2s, got log:\n%s", logBuf.String())
+}
+
 func TestMQTTAdapterWatchdogForcesReconnectWhenStuckPastThreshold(t *testing.T) {
 	brokerURL, stopBroker := startStoppableTestBroker(t)
 
