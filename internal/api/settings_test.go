@@ -39,3 +39,47 @@ func TestNormalizeNTPServer(t *testing.T) {
 		})
 	}
 }
+
+// TestNormalizeBrokerURL guards against the 2026-09-03 incident: a leftover
+// leading space in mqtt.broker_url (from an earlier placeholder value that
+// a later Settings-page edit appended to instead of replacing) made
+// net/url.Parse fail, which paho's AddBroker silently swallows into its
+// own internal logger - leaving its server list empty and Connect()
+// failing with "no servers defined to connect to", which is fatal at
+// gateway startup (cmd/gateway/adapter.go). The gateway crash-looped for
+// about 5 hours before this was caught. normalizeBrokerURL must reject
+// that value at save time instead of writing it to config.yaml.
+func TestNormalizeBrokerURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"valid tcp URL", "tcp://mqtt.nxge.co:1883", "tcp://mqtt.nxge.co:1883", false},
+		{"valid ssl URL", "ssl://broker.internal:8883", "ssl://broker.internal:8883", false},
+		{"leading space auto-trimmed - the real incident, now fixed not just rejected", " tcp://mqtt.nxge.co:1883", "tcp://mqtt.nxge.co:1883", false},
+		{"trailing space stripped", "tcp://mqtt.nxge.co:1883 ", "tcp://mqtt.nxge.co:1883", false},
+		{"empty rejected", "", "", true},
+		{"whitespace-only rejected", "   ", "", true},
+		{"no scheme/host rejected", "not a url", "", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeBrokerURL(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("normalizeBrokerURL(%q) = %q, nil; want error", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeBrokerURL(%q) unexpected error: %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Fatalf("normalizeBrokerURL(%q) = %q; want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

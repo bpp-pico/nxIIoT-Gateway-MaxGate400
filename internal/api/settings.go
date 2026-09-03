@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -77,6 +78,30 @@ func normalizeNTPServer(raw string) (string, error) {
 	return s, nil
 }
 
+// normalizeBrokerURL trims whitespace and confirms broker_url will actually
+// parse into a usable paho server entry before it's ever written to
+// config.yaml. A stray leading/trailing space (e.g. left over from an
+// earlier placeholder value that a later edit appended to instead of
+// replacing) makes net/url.Parse fail; paho's AddBroker swallows that
+// parse error into its own internal (silent-by-default) logger and simply
+// adds nothing to its server list, so Connect() later fails with "no
+// servers defined to connect to" - and since a failed initial MQTT
+// connect is fatal at gateway startup (cmd/gateway/adapter.go), that
+// silently-malformed value crash-loops the whole process, not just
+// forwarding, with no error ever surfaced anywhere in the UI (see
+// MEMORY.md's 2026-09-03 entry - this exact scenario happened for real).
+func normalizeBrokerURL(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", fmt.Errorf("mqtt.broker_url is required")
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("mqtt.broker_url must be a valid broker URL like tcp://host:1883 (got %q)", raw)
+	}
+	return s, nil
+}
+
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	var dto settingsDTO
 	dto.Gateway.ID = s.cfg.Gateway.ID
@@ -118,10 +143,17 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A disabled Store & Forward never builds an adapter (see main.go), so
-	// the transport/broker fields are moot - skip validating them.
+	// the transport/broker fields are moot - skip validating them. Validate
+	// broker_url even when transport is "http" (not just "mqtt") - a bad
+	// value left behind an inert http transport is exactly what crash-
+	// looped the gateway for real once the transport was later switched
+	// (or just re-saved) with mqtt selected; see normalizeBrokerURL.
+	var brokerURL string
 	if dto.StoreForward.Enabled {
-		if dto.MQTT.BrokerURL == "" {
-			writeError(w, http.StatusBadRequest, "mqtt.broker_url is required")
+		var err error
+		brokerURL, err = normalizeBrokerURL(dto.MQTT.BrokerURL)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		switch dto.MQTT.Transport {
@@ -136,7 +168,14 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	s.cfg.Gateway.Name = dto.Gateway.Name
 	s.cfg.StoreForward.Disabled = !dto.StoreForward.Enabled
 	s.cfg.Forwarder.Transport = dto.MQTT.Transport
-	s.cfg.MQTT.BrokerURL = dto.MQTT.BrokerURL
+	if dto.StoreForward.Enabled {
+		s.cfg.MQTT.BrokerURL = brokerURL
+	} else {
+		// Not validated above (moot while disabled) - still trim so a
+		// stray space doesn't linger in config.yaml waiting to bite if
+		// Store & Forward is re-enabled later without touching this field.
+		s.cfg.MQTT.BrokerURL = strings.TrimSpace(dto.MQTT.BrokerURL)
+	}
 	s.cfg.MQTT.ClientID = dto.MQTT.ClientID
 	s.cfg.MQTT.Username = dto.MQTT.Username
 	if dto.MQTT.Password != "" {
