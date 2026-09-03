@@ -8,14 +8,30 @@ import (
 )
 
 type Config struct {
-	Gateway   GatewayConfig   `yaml:"gateway"`
-	API       APIConfig       `yaml:"api"`
-	Database  DatabaseConfig  `yaml:"database"`
-	Queue     QueueConfig     `yaml:"queue"`
-	Forwarder ForwarderConfig `yaml:"forwarder"`
-	Log       LogConfig       `yaml:"log"`
-	MQTT      MQTTConfig      `yaml:"mqtt"`
-	Time      TimeConfig      `yaml:"time"`
+	Gateway      GatewayConfig      `yaml:"gateway"`
+	API          APIConfig          `yaml:"api"`
+	Database     DatabaseConfig     `yaml:"database"`
+	Queue        QueueConfig        `yaml:"queue"`
+	StoreForward StoreForwardConfig `yaml:"store_forward"`
+	Forwarder    ForwarderConfig    `yaml:"forwarder"`
+	Log          LogConfig          `yaml:"log"`
+	MQTT         MQTTConfig         `yaml:"mqtt"`
+	Time         TimeConfig         `yaml:"time"`
+}
+
+// StoreForwardConfig is the master switch for the whole Store & Forward
+// pipeline (Rule 1's queue+forwarder half). Disabled puts the gateway into
+// "Modbus read-only" mode: acquisition keeps polling and readings still
+// show up live (status/logs), but processor.Process is never called (so
+// nothing is written to data_queue) and the Forwarder never starts (so no
+// MQTT/HTTP connection is attempted at all - see cmd/gateway/adapter.go's
+// fatal-on-MQTT-connect-failure behavior, which this also sidesteps).
+// Field is named Disabled (not Enabled) so the zero value - what any
+// config.yaml written before this field existed unmarshals to - means
+// "not disabled", i.e. existing deployments keep today's behavior with no
+// extra defaulting code needed in Load.
+type StoreForwardConfig struct {
+	Disabled bool `yaml:"disabled"`
 }
 
 type GatewayConfig struct {

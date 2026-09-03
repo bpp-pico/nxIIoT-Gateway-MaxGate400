@@ -176,6 +176,11 @@ export interface Settings {
   queue?: {
     retention_days: number
   }
+  // Optional: absent when talking to a gateway build from before this field
+  // existed. Defaults to true (enabled) when missing.
+  store_forward?: {
+    enabled: boolean
+  }
 }
 
 export interface SaveSettingsResult {

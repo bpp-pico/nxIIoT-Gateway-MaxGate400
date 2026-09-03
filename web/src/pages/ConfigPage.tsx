@@ -44,6 +44,7 @@ export function ConfigPage() {
 type LoadedSettings = Settings & {
   queue: NonNullable<Settings['queue']>
   mqtt: Settings['mqtt'] & { transport: string }
+  store_forward: NonNullable<Settings['store_forward']>
 }
 
 function SettingsSection() {
@@ -58,7 +59,12 @@ function SettingsSection() {
       // Default queue.retention_days when talking to an older gateway build
       // that doesn't send it yet, so the form always has a value to show.
       .then((s) =>
-        setSettings({ ...s, queue: s.queue ?? { retention_days: 30 }, mqtt: { ...s.mqtt, transport: s.mqtt.transport ?? 'mqtt' } }),
+        setSettings({
+          ...s,
+          queue: s.queue ?? { retention_days: 30 },
+          mqtt: { ...s.mqtt, transport: s.mqtt.transport ?? 'mqtt' },
+          store_forward: s.store_forward ?? { enabled: true },
+        }),
       )
       .catch((err) => setError(String(err instanceof Error ? err.message : err)))
   }, [])
@@ -143,6 +149,26 @@ function SettingsSection() {
               onChange={(e) => setSettings({ ...settings, gateway: { ...settings.gateway, name: e.target.value } })}
             />
           </div>
+        </div>
+
+        <div style={styles.card}>
+          <div style={styles.cardTitle}>Store &amp; Forward</div>
+          <div style={{ ...styles.formRow, flexDirection: 'row', alignItems: 'center', gap: '0.5rem' }}>
+            <input
+              type="checkbox"
+              id="store-forward-enabled"
+              checked={settings.store_forward.enabled}
+              onChange={(e) => setSettings({ ...settings, store_forward: { enabled: e.target.checked } })}
+            />
+            <label htmlFor="store-forward-enabled" style={styles.label}>
+              Enabled
+            </label>
+          </div>
+          <p style={{ ...styles.muted, marginTop: -8 }}>
+            {settings.store_forward.enabled
+              ? 'Readings are saved locally and sent to the MQTT/HTTP server below (default behavior).'
+              : 'Modbus read-only mode: readings are polled and shown live (Dashboard, Logs) but never saved locally or sent anywhere — no MQTT/HTTP connection is made at all. The fields below are ignored while this is off.'}
+          </p>
         </div>
 
         <div style={styles.card}>

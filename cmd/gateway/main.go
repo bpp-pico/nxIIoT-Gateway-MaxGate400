@@ -117,7 +117,9 @@ func main() {
 	datapointRepo := datapoint.NewRepository(db)
 	manager := acquisition.NewManager(ctx, log, connRepo, deviceRepo, datapointRepo, func(r acquisition.Reading) {
 		statusStore.Update(r.DeviceID, string(r.Quality), r.EventTimestamp)
-		proc.Process(ctx, r)
+		if !cfg.StoreForward.Disabled {
+			proc.Process(ctx, r)
+		}
 		if r.Value != nil {
 			log.Info("reading", "device", r.DeviceName, "tag", r.Tag, "value", *r.Value, "unit", r.Unit, "quality", r.Quality)
 		} else {
@@ -132,18 +134,27 @@ func main() {
 
 	// Store & Forward runs independently of acquisition (Rule 1): a down
 	// server only grows the PENDING backlog, it never blocks Modbus polling.
-	adapter, closeAdapter, err := buildAdapter(ctx, cfg, log)
-	if err != nil {
-		log.Error("failed to initialize forwarder adapter", "error", err)
-		os.Exit(1)
-	}
-	defer closeAdapter()
+	// StoreForward.Disabled skips this whole block - no queue writes (see
+	// the acquisition callback above), no adapter, no MQTT/HTTP connection
+	// attempt, no forwarder goroutine. fwd stays nil; the API layer already
+	// handles a nil forwarder (see internal/api/storeforward.go).
+	var fwd *forwarder.Forwarder
+	if cfg.StoreForward.Disabled {
+		log.Warn("Store & Forward disabled via config - Modbus-read-only mode: readings are polled and shown live but not persisted or sent anywhere")
+	} else {
+		adapter, closeAdapter, err := buildAdapter(ctx, cfg, log)
+		if err != nil {
+			log.Error("failed to initialize forwarder adapter", "error", err)
+			os.Exit(1)
+		}
+		defer closeAdapter()
 
-	fwd := forwarder.New(queueRepo, adapter, forwarder.Config{
-		BatchSize:    cfg.Forwarder.BatchSize,
-		PollInterval: time.Duration(cfg.Forwarder.PollIntervalMs) * time.Millisecond,
-	}, log)
-	go fwd.Run(ctx)
+		fwd = forwarder.New(queueRepo, adapter, forwarder.Config{
+			BatchSize:    cfg.Forwarder.BatchSize,
+			PollInterval: time.Duration(cfg.Forwarder.PollIntervalMs) * time.Millisecond,
+		}, log)
+		go fwd.Run(ctx)
+	}
 
 	// Host network configuration (§16 Config page "Gateway IP"): only
 	// meaningful when this binary runs directly on the host (systemd

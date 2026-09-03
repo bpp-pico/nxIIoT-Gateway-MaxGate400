@@ -45,6 +45,12 @@ type settingsDTO struct {
 	Queue struct {
 		RetentionDays int `json:"retention_days"`
 	} `json:"queue"`
+	// StoreForward is the master switch for the whole pipeline (see
+	// config.StoreForwardConfig) - when Enabled is false, the gateway only
+	// polls Modbus; nothing is persisted to data_queue or sent anywhere.
+	StoreForward struct {
+		Enabled bool `json:"enabled"`
+	} `json:"store_forward"`
 }
 
 // normalizeNTPServer strips a leading /etc/ntp.conf-style "server "/"pool "
@@ -87,6 +93,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	dto.Time.Timezone = s.cfg.Time.Timezone
 	dto.Time.SyncIntervalSec = s.cfg.Time.SyncIntervalSec
 	dto.Queue.RetentionDays = s.cfg.Queue.RetentionDays
+	dto.StoreForward.Enabled = !s.cfg.StoreForward.Disabled
 	writeJSON(w, http.StatusOK, dto)
 }
 
@@ -110,19 +117,24 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "gateway.id is required")
 		return
 	}
-	if dto.MQTT.BrokerURL == "" {
-		writeError(w, http.StatusBadRequest, "mqtt.broker_url is required")
-		return
-	}
-	switch dto.MQTT.Transport {
-	case "http", "mqtt":
-	default:
-		writeError(w, http.StatusBadRequest, `transport must be "http" or "mqtt"`)
-		return
+	// A disabled Store & Forward never builds an adapter (see main.go), so
+	// the transport/broker fields are moot - skip validating them.
+	if dto.StoreForward.Enabled {
+		if dto.MQTT.BrokerURL == "" {
+			writeError(w, http.StatusBadRequest, "mqtt.broker_url is required")
+			return
+		}
+		switch dto.MQTT.Transport {
+		case "http", "mqtt":
+		default:
+			writeError(w, http.StatusBadRequest, `transport must be "http" or "mqtt"`)
+			return
+		}
 	}
 
 	s.cfg.Gateway.ID = dto.Gateway.ID
 	s.cfg.Gateway.Name = dto.Gateway.Name
+	s.cfg.StoreForward.Disabled = !dto.StoreForward.Enabled
 	s.cfg.Forwarder.Transport = dto.MQTT.Transport
 	s.cfg.MQTT.BrokerURL = dto.MQTT.BrokerURL
 	s.cfg.MQTT.ClientID = dto.MQTT.ClientID
