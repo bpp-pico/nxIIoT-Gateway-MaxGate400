@@ -46,6 +46,9 @@ export interface DataPoint {
   unit?: string
   priority?: Priority
   enabled: boolean
+  last_value?: number | null
+  last_quality?: string
+  last_read_at?: string
 }
 
 export interface TestConnectionResult {

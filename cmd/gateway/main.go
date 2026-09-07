@@ -111,12 +111,19 @@ func main() {
 	// device/data point is created, edited, deleted, or toggled, so the
 	// Web UI takes effect without a gateway restart.
 	statusStore := status.NewStore()
+	latestStore := acquisition.NewLatestStore()
 	diagStore := diagnostics.NewStore()
 	connRepo := connection.NewRepository(db)
 	deviceRepo := device.NewRepository(db)
 	datapointRepo := datapoint.NewRepository(db)
 	manager := acquisition.NewManager(ctx, log, connRepo, deviceRepo, datapointRepo, func(r acquisition.Reading) {
 		statusStore.Update(r.DeviceID, string(r.Quality), r.EventTimestamp)
+		latestStore.Update(r.DatapointID, acquisition.LatestValue{
+			Value:   r.Value,
+			Quality: string(r.Quality),
+			Unit:    r.Unit,
+			At:      r.EventTimestamp,
+		})
 		if !cfg.StoreForward.Disabled {
 			proc.Process(ctx, r)
 		}
@@ -163,7 +170,7 @@ func main() {
 	// degrades to netconfig.ErrUnsupported wherever nmcli isn't present.
 	netSvc := netconfig.NewService(netconfig.New(), log)
 
-	handler := api.NewRouter(cfg, *configPath, db, log, statusStore, manager, queueRepo, fwd, timeSvc, diagStore, logBuf, netSvc)
+	handler := api.NewRouter(cfg, *configPath, db, log, statusStore, latestStore, manager, queueRepo, fwd, timeSvc, diagStore, logBuf, netSvc)
 	srv := &http.Server{
 		Addr:    cfg.API.ListenAddr,
 		Handler: handler,

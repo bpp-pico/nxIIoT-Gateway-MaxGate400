@@ -1,10 +1,23 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import type { DataPoint, Device } from '../types'
-import { styles } from '../styles'
+import { styles, qualityBadgeStyle } from '../styles'
 import { Icon } from '../icons'
 import { Modal } from './Modal'
 import { DataPointForm } from './DataPointForm'
+
+const LIVE_VALUE_REFRESH_MS = 5000
+
+function formatTimestamp(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString()
+}
+
+function formatValue(value: number): string {
+  return value.toFixed(2)
+}
 
 interface DataPointsPanelProps {
   device: Device
@@ -28,6 +41,16 @@ export function DataPointsPanel({ device, onClose }: DataPointsPanelProps) {
   }
 
   useEffect(load, [device.id])
+
+  // Poll for live values/timestamps from the acquisition engine (§16 Data
+  // Points "last value") while this panel is open — separate from `load`
+  // so it doesn't flash the "Loading…" state on every tick.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      api.listDataPoints(device.id).then(setPoints).catch(() => {})
+    }, LIVE_VALUE_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [device.id])
 
   const handleSave = async (dp: Partial<DataPoint>) => {
     if (editing === 'new') {
@@ -55,8 +78,8 @@ export function DataPointsPanel({ device, onClose }: DataPointsPanelProps) {
     try {
       const result = await api.testDataPoint(dp.id)
       const text =
-        result.quality === 'GOOD'
-          ? `${result.value} ${result.unit ?? ''}`
+        result.quality === 'GOOD' && result.value != null
+          ? `${formatValue(result.value)} ${result.unit ?? ''}`
           : `${result.quality}${result.error ? `: ${result.error}` : ''}`
       setTestResults((r) => ({ ...r, [dp.id]: text }))
     } catch (err) {
@@ -95,6 +118,8 @@ export function DataPointsPanel({ device, onClose }: DataPointsPanelProps) {
               <th style={styles.th}>Scale</th>
               <th style={styles.th}>Unit</th>
               <th style={styles.th}>Enabled</th>
+              <th style={styles.th}>Last Value</th>
+              <th style={styles.th}>Last Read</th>
               <th style={styles.th}>Test Read</th>
               <th style={styles.th}></th>
             </tr>
@@ -110,6 +135,27 @@ export function DataPointsPanel({ device, onClose }: DataPointsPanelProps) {
                 <td style={styles.td}>{dp.unit}</td>
                 <td style={styles.td}>
                   <input type="checkbox" style={styles.checkbox} checked={dp.enabled} onChange={() => handleToggleEnabled(dp)} />
+                </td>
+                <td style={styles.td}>
+                  {dp.last_read_at ? (
+                    dp.last_quality === 'GOOD' && dp.last_value != null ? (
+                      <span>{formatValue(dp.last_value)} {dp.unit}</span>
+                    ) : (
+                      <span style={qualityBadgeStyle(dp.last_quality)}>
+                        <span style={styles.badgeDot} />
+                        {dp.last_quality}
+                      </span>
+                    )
+                  ) : (
+                    <span style={styles.muted}>—</span>
+                  )}
+                </td>
+                <td style={styles.td}>
+                  {dp.last_read_at ? (
+                    <span style={{ fontSize: '0.8rem', color: '#6B6580' }}>{formatTimestamp(dp.last_read_at)}</span>
+                  ) : (
+                    <span style={styles.muted}>—</span>
+                  )}
                 </td>
                 <td style={styles.td}>
                   <button style={styles.smallButton} onClick={() => handleTestRead(dp)}>

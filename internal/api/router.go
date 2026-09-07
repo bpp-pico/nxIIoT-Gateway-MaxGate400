@@ -34,6 +34,7 @@ type Server struct {
 	deviceRepo    *device.Repository
 	datapointRepo *datapoint.Repository
 	status        *status.Store
+	latest        *acquisition.LatestStore
 	manager       *acquisition.Manager
 	queueRepo     *queue.Repository
 	forwarder     *forwarder.Forwarder
@@ -43,7 +44,7 @@ type Server struct {
 	netSvc        *netconfig.Service
 }
 
-func NewRouter(cfg *config.Config, configPath string, db *sql.DB, log *slog.Logger, statusStore *status.Store, manager *acquisition.Manager, queueRepo *queue.Repository, fwd *forwarder.Forwarder, timeSvc *timeservice.Service, diag *diagnostics.Store, logBuf *logger.RingBuffer, netSvc *netconfig.Service) http.Handler {
+func NewRouter(cfg *config.Config, configPath string, db *sql.DB, log *slog.Logger, statusStore *status.Store, latestStore *acquisition.LatestStore, manager *acquisition.Manager, queueRepo *queue.Repository, fwd *forwarder.Forwarder, timeSvc *timeservice.Service, diag *diagnostics.Store, logBuf *logger.RingBuffer, netSvc *netconfig.Service) http.Handler {
 	s := &Server{
 		cfg:           cfg,
 		configPath:    configPath,
@@ -53,6 +54,7 @@ func NewRouter(cfg *config.Config, configPath string, db *sql.DB, log *slog.Logg
 		deviceRepo:    device.NewRepository(db),
 		datapointRepo: datapoint.NewRepository(db),
 		status:        statusStore,
+		latest:        latestStore,
 		manager:       manager,
 		queueRepo:     queueRepo,
 		forwarder:     fwd,

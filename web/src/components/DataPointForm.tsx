@@ -137,20 +137,22 @@ export function DataPointForm({ initial, onSubmit, onCancel }: DataPointFormProp
             onChange={(e) => set('offset', Number(e.target.value))}
           />
         </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: '0.75rem' }}>
         <div style={{ ...styles.formRow, flex: 1 }}>
           <label style={styles.label}>Unit</label>
           <input style={styles.input} value={form.unit} onChange={(e) => set('unit', e.target.value)} />
         </div>
-      </div>
-
-      <div style={styles.formRow}>
-        <label style={styles.label}>Priority</label>
-        <select style={styles.input} value={form.priority} onChange={(e) => set('priority', e.target.value as Priority)}>
-          <option value="CRITICAL">Critical</option>
-          <option value="HIGH">High</option>
-          <option value="NORMAL">Normal</option>
-          <option value="LOW">Low</option>
-        </select>
+        <div style={{ ...styles.formRow, flex: 1 }}>
+          <label style={styles.label}>Priority</label>
+          <select style={styles.input} value={form.priority} onChange={(e) => set('priority', e.target.value as Priority)}>
+            <option value="CRITICAL">Critical</option>
+            <option value="HIGH">High</option>
+            <option value="NORMAL">Normal</option>
+            <option value="LOW">Low</option>
+          </select>
+        </div>
       </div>
 
       <div style={{ ...styles.formRow, flexDirection: 'row', alignItems: 'center', gap: '0.5rem' }}>

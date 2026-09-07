@@ -2,6 +2,7 @@ package timeservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -33,11 +34,32 @@ func (r *fakeRTC) Write(t time.Time) error {
 	return nil
 }
 
+// fakeClock lets tests observe/control system-clock-set behavior without
+// depending on clock_linux.go/clock_other.go's real (and, in a test
+// environment, either privileged or platform-unsupported) behavior.
+type fakeClock struct {
+	err  error
+	sets []time.Time
+}
+
+func (c *fakeClock) Set(t time.Time) error {
+	if c.err != nil {
+		return c.err
+	}
+	c.sets = append(c.sets, t)
+	return nil
+}
+
 func newTestService(cfg Config, rtc RTC) *Service {
+	return newTestServiceWithClock(cfg, rtc, &fakeClock{})
+}
+
+func newTestServiceWithClock(cfg Config, rtc RTC, clock SystemClock) *Service {
 	return &Service{
 		cfg:      cfg,
 		timezone: "UTC",
 		rtc:      rtc,
+		clock:    clock,
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		status:   Status{NTPServer: cfg.NTPServer, TimeQuality: QualityUnsynced},
 	}
@@ -76,6 +98,34 @@ func TestServiceDisciplinesRTCOnSuccessfulSync(t *testing.T) {
 	}
 	if diff := time.Since(rtc.writes[0]); diff < -2*time.Second || diff > 2*time.Second {
 		t.Errorf("rtc write time %v is not close to now", rtc.writes[0])
+	}
+}
+
+func TestServiceStepsSystemClockOnSuccessfulSync(t *testing.T) {
+	addr := startFakeNTPServer(t, 2*time.Second)
+	clock := &fakeClock{}
+	svc := newTestServiceWithClock(Config{NTPServer: addr, QueryTimeout: time.Second}, &fakeRTC{}, clock)
+
+	svc.syncOnce(context.Background())
+
+	if len(clock.sets) != 1 {
+		t.Fatalf("expected exactly 1 system clock set, got %d", len(clock.sets))
+	}
+	if diff := time.Since(clock.sets[0]); diff < -3*time.Second || diff > 1*time.Second {
+		t.Errorf("clock set to %v, want ~2s ahead of now", clock.sets[0])
+	}
+}
+
+func TestServiceSyncSurvivesSystemClockSetFailure(t *testing.T) {
+	addr := startFakeNTPServer(t, time.Second)
+	clock := &fakeClock{err: errors.New("no CAP_SYS_TIME")}
+	svc := newTestServiceWithClock(Config{NTPServer: addr, QueryTimeout: time.Second}, &fakeRTC{}, clock)
+
+	svc.syncOnce(context.Background())
+
+	st := svc.Status()
+	if st.TimeQuality != QualitySynced {
+		t.Errorf("TimeQuality = %s, want SYNCED even when the system clock set fails", st.TimeQuality)
 	}
 }
 

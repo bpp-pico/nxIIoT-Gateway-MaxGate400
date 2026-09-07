@@ -49,6 +49,7 @@ type Service struct {
 	cfg      Config
 	timezone string
 	rtc      RTC
+	clock    SystemClock
 	log      *slog.Logger
 
 	mu     sync.RWMutex
@@ -69,6 +70,7 @@ func New(cfg Config, timezone string, log *slog.Logger) *Service {
 		cfg:      cfg,
 		timezone: timezone,
 		rtc:      newRTC(cfg.RTCDevice),
+		clock:    newSystemClock(),
 		log:      log,
 		status:   Status{NTPServer: cfg.NTPServer, TimeQuality: QualityUnsynced},
 	}
@@ -118,6 +120,21 @@ func (s *Service) syncOnce(ctx context.Context) {
 	}
 
 	now := time.Now().UTC()
+	corrected := now.Add(offset)
+
+	// Step the live OS clock to the NTP-corrected time on every successful
+	// sync. Without this, ClockOffset is measured accurately but nothing
+	// ever acts on it — the process's own time.Now() (and every timestamp
+	// derived from it: reading EventTimestamp, MQTT batches, logs) just
+	// keeps drifting for as long as the host stays up, since no OS-level
+	// NTP daemon (chrony/timesyncd) runs on this device either. A failure
+	// here (e.g. no CAP_SYS_TIME) is logged at Debug like the RTC write
+	// below — it degrades to "offset known but uncorrected", never fatal
+	// (Rule 10).
+	if err := s.clock.Set(corrected); err != nil {
+		s.log.Debug("system clock set skipped", "error", err)
+	}
+
 	s.mu.Lock()
 	s.status.NTPSynced = true
 	s.status.LastSync = &now
@@ -130,7 +147,7 @@ func (s *Service) syncOnce(ctx context.Context) {
 	// boot without NTP reachable starts from a recent, NTP-derived time
 	// instead of a stale or dead-battery clock (§12). Write is a no-op
 	// failure (logged at Debug) on any host without a real RTC.
-	if err := s.rtc.Write(now.Add(offset)); err != nil {
+	if err := s.rtc.Write(corrected); err != nil {
 		s.log.Debug("rtc write skipped", "error", err)
 	}
 }
