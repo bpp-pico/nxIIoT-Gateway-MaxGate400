@@ -76,9 +76,12 @@ export function StoreForwardPage() {
 
             <div style={styles.card}>
               <div style={styles.cardIcon}><Icon name="clock" /></div>
-              <div style={styles.cardTitle}>Retention Period</div>
-              <div style={styles.cardValue}>{status.retention_days != null ? `${status.retention_days} days` : '—'}</div>
-              <div style={styles.cardSub}>how long SENT records are kept before being purged</div>
+              <div style={styles.cardTitle}>Queue Size</div>
+              <div style={styles.cardValue}>
+                {status.total_rows != null ? fmtNum(status.total_rows) : '—'}
+                {status.max_rows != null ? ` / ${fmtNum(status.max_rows)}` : ''}
+              </div>
+              <div style={styles.cardSub}>oldest non-critical records are evicted once max rows is exceeded</div>
             </div>
 
             <div style={styles.card}>

@@ -10,20 +10,28 @@ type diagnosticsDTO struct {
 	TimeoutCount      int64   `json:"timeout_count"`
 	CRCErrorCount     int64   `json:"crc_error_count"`
 	RetryCount        int64   `json:"retry_count"`
+	// WriteRatePerSec is the live data_queue insert rate (rows/sec), same
+	// metric as storeForwardStatusDTO's — surfaced here too so operators
+	// can compare it against eviction capacity while looking at Modbus
+	// throughput, without switching pages.
+	WriteRatePerSec float64 `json:"write_rate_per_sec"`
 }
 
 func (s *Server) getDiagnostics(w http.ResponseWriter, r *http.Request) {
-	if s.diag == nil {
-		writeJSON(w, http.StatusOK, diagnosticsDTO{})
-		return
+	dto := diagnosticsDTO{}
+	if s.diag != nil {
+		snap := s.diag.Snapshot()
+		dto.ModbusTX = snap.TXCount
+		dto.ModbusRX = snap.RXCount
+		dto.AvgResponseTimeMs = snap.AvgResponseTimeMs
+		dto.TimeoutCount = snap.TimeoutCount
+		dto.CRCErrorCount = snap.CRCErrorCount
+		dto.RetryCount = snap.RetryCount
 	}
-	snap := s.diag.Snapshot()
-	writeJSON(w, http.StatusOK, diagnosticsDTO{
-		ModbusTX:          snap.TXCount,
-		ModbusRX:          snap.RXCount,
-		AvgResponseTimeMs: snap.AvgResponseTimeMs,
-		TimeoutCount:      snap.TimeoutCount,
-		CRCErrorCount:     snap.CRCErrorCount,
-		RetryCount:        snap.RetryCount,
-	})
+	if rate, err := s.queueWriteRatePerSec(r.Context()); err == nil {
+		dto.WriteRatePerSec = rate
+	} else {
+		s.log.Warn("failed to compute queue write rate", "error", err)
+	}
+	writeJSON(w, http.StatusOK, dto)
 }

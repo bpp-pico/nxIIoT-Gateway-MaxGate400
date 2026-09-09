@@ -56,12 +56,13 @@ function SettingsSection() {
   useEffect(() => {
     api
       .getSettings()
-      // Default queue.retention_days when talking to an older gateway build
-      // that doesn't send it yet, so the form always has a value to show.
+      // Default queue.max_rows/evict_batch_size when talking to an older
+      // gateway build that doesn't send them yet, so the form always has a
+      // value to show.
       .then((s) =>
         setSettings({
           ...s,
-          queue: s.queue ?? { retention_days: 30 },
+          queue: { max_rows: 500000, evict_batch_size: 100, ...s.queue },
           mqtt: { ...s.mqtt, transport: s.mqtt.transport ?? 'mqtt' },
           store_forward: s.store_forward ?? { enabled: true },
         }),
@@ -280,18 +281,35 @@ function SettingsSection() {
         <div style={styles.card}>
           <div style={styles.cardTitle}>Store &amp; Forward</div>
           <div style={styles.formRow}>
-            <label style={styles.label}>Retention (days)</label>
+            <label style={styles.label}>Max Queue Size (rows)</label>
             <input
               type="number"
               min={1}
               style={styles.input}
-              value={settings.queue.retention_days}
-              onChange={(e) => setSettings({ ...settings, queue: { ...settings.queue, retention_days: Number(e.target.value) } })}
+              value={settings.queue.max_rows}
+              onChange={(e) => setSettings({ ...settings, queue: { ...settings.queue, max_rows: Number(e.target.value) } })}
             />
           </div>
           <p style={{ ...styles.muted, marginTop: '0.35rem', marginBottom: 0 }}>
-            How long a successfully-sent (SENT) reading stays in the local database before being purged. Does not
-            affect data still pending delivery.
+            Maximum rows kept in the local database. Once exceeded, the oldest non-critical readings are deleted
+            first to make room (CRITICAL-priority data is never evicted this way).
+          </p>
+          <div style={{ ...styles.formRow, marginTop: '0.75rem' }}>
+            <label style={styles.label}>Eviction Batch Size</label>
+            <input
+              type="number"
+              min={1}
+              style={styles.input}
+              value={settings.queue.evict_batch_size}
+              onChange={(e) =>
+                setSettings({ ...settings, queue: { ...settings.queue, evict_batch_size: Number(e.target.value) } })
+              }
+            />
+          </div>
+          <p style={{ ...styles.muted, marginTop: '0.35rem', marginBottom: 0 }}>
+            How many rows are deleted per eviction pass once Max Queue Size is exceeded. Must be large enough to
+            keep pace with the actual write rate (see the Queue Write Rate on the Dashboard/Diagnostics pages) —
+            too low and the queue keeps growing past Max Queue Size even though eviction is running correctly.
           </p>
         </div>
       </div>

@@ -150,6 +150,9 @@ func (r *Repository) RecoverSendingToPending(ctx context.Context) (int64, error)
 
 // Stats summarizes queue state for the Store & Forward dashboard (§16).
 type Stats struct {
+	// TotalCount is every row in data_queue regardless of status — the
+	// metric queue.max_rows caps directly (see RunMaxRowsSweeper).
+	TotalCount    int64
 	PendingCount  int64
 	SendingCount  int64
 	OldestPending *time.Time
@@ -162,13 +165,14 @@ func (r *Repository) Stats(ctx context.Context) (Stats, error) {
 	var oldest, newest sql.NullString
 	err := r.db.QueryRowContext(ctx, `
 		SELECT
+			COUNT(*),
 			COUNT(*) FILTER (WHERE status = 'PENDING'),
 			COUNT(*) FILTER (WHERE status = 'SENDING'),
 			MIN(event_timestamp) FILTER (WHERE status = 'PENDING'),
 			MAX(event_timestamp) FILTER (WHERE status = 'PENDING'),
 			COALESCE(SUM(retry_count) FILTER (WHERE status = 'PENDING'), 0)
 		FROM data_queue`,
-	).Scan(&s.PendingCount, &s.SendingCount, &oldest, &newest, &s.TotalRetries)
+	).Scan(&s.TotalCount, &s.PendingCount, &s.SendingCount, &oldest, &newest, &s.TotalRetries)
 	if err != nil {
 		return Stats{}, err
 	}

@@ -54,11 +54,22 @@ type DatabaseConfig struct {
 	Path string `yaml:"path"`
 }
 
-// QueueConfig controls retention and storage-pressure handling of the
-// persistent data_queue (§9, §17).
+// QueueConfig controls capacity and storage-pressure handling of the
+// persistent data_queue (§9, §17). Two independent caps, both enforced by
+// evicting oldest non-critical rows first (EvictOldestNonCritical), never
+// deleting CRITICAL data:
+//   - MaxRows caps the queue directly, "keep at most N rows, overwrite the
+//     oldest once full" — a ring-buffer-style bound on data_queue itself,
+//     regardless of what else shares the disk.
+//   - StorageFullPercent is a separate, disk-wide safety net (other files
+//     on the same volume — logs, other apps — can also fill the disk even
+//     if MaxRows is never reached).
+//
+// EvictBatchSize is shared by both sweepers — it's just "how many rows to
+// delete per eviction pass", not specific to either policy.
 type QueueConfig struct {
-	RetentionDays        int     `yaml:"retention_days"`
-	SweepInterval        int     `yaml:"sweep_interval_minutes"`
+	MaxRows              int     `yaml:"max_rows"`
+	MaxRowsSweepInterval int     `yaml:"max_rows_sweep_interval_seconds"`
 	StorageFullPercent   float64 `yaml:"storage_full_percent"`
 	StorageSweepInterval int     `yaml:"storage_sweep_interval_seconds"`
 	EvictBatchSize       int     `yaml:"evict_batch_size"`
@@ -172,11 +183,15 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	if cfg.Queue.RetentionDays <= 0 {
-		cfg.Queue.RetentionDays = 30
+	if cfg.Queue.MaxRows <= 0 {
+		// 500,000 rows (~130MB at the ~265 bytes/row observed during the
+		// 2026-09-07 incident, MEMORY.md) — well below the SD-card pressure
+		// that incident hit at ~4.9M rows/1.3GB. Deliberately conservative;
+		// tune via queue.max_rows for a given device's actual free space.
+		cfg.Queue.MaxRows = 500_000
 	}
-	if cfg.Queue.SweepInterval <= 0 {
-		cfg.Queue.SweepInterval = 60
+	if cfg.Queue.MaxRowsSweepInterval <= 0 {
+		cfg.Queue.MaxRowsSweepInterval = 60
 	}
 	if cfg.Queue.StorageFullPercent <= 0 {
 		cfg.Queue.StorageFullPercent = 95

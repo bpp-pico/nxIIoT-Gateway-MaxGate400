@@ -295,6 +295,9 @@ func TestStatsCountsPendingAndSending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stats: %v", err)
 	}
+	if stats.TotalCount != 3 {
+		t.Errorf("TotalCount = %d, want 3", stats.TotalCount)
+	}
 	if stats.PendingCount != 2 {
 		t.Errorf("PendingCount = %d, want 2", stats.PendingCount)
 	}

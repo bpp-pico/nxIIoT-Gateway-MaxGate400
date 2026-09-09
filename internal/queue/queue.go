@@ -85,18 +85,17 @@ func (r *Repository) Insert(ctx context.Context, e Entry) (Entry, error) {
 	return e, nil
 }
 
-// DeleteSentOlderThan removes SENT rows whose sent_at predates cutoff
-// (retention policy, §9/§17). Rows still PENDING/SENDING/FAILED are never
-// touched here regardless of age — only Store & Forward (Phase 4) storage
-// pressure policy may evict those.
-func (r *Repository) DeleteSentOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	res, err := r.db.ExecContext(ctx,
-		`DELETE FROM data_queue WHERE status = 'SENT' AND sent_at IS NOT NULL AND sent_at < ?`,
-		cutoff.UTC().Format(timeLayout))
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+// CountInsertedSince returns how many rows have event_timestamp at or
+// after since — data_queue keeps no separate "inserted_at" column, but
+// EventTimestamp is assigned by the acquisition callback right before
+// Insert writes the row, so it's an accurate proxy for a live write-rate
+// estimate (rows-per-second) on the Dashboard/Diagnostics pages.
+func (r *Repository) CountInsertedSince(ctx context.Context, since time.Time) (int64, error) {
+	var n int64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM data_queue WHERE event_timestamp >= ?`,
+		since.UTC().Format(timeLayout)).Scan(&n)
+	return n, err
 }
 
 func priorityOrDefault(p string) string {

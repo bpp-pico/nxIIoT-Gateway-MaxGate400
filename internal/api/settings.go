@@ -15,7 +15,7 @@ import (
 )
 
 // settingsDTO covers the config.yaml fields the user asked to edit from
-// the Web UI (Gateway identity, MQTT broker, Time/NTP, queue retention) —
+// the Web UI (Gateway identity, MQTT broker, Time/NTP, queue max rows) —
 // everything else in config.yaml (database path, other queue thresholds,
 // forwarder batch tuning, log level) stays file-only, no UI surface for it.
 type settingsDTO struct {
@@ -46,7 +46,15 @@ type settingsDTO struct {
 		SyncIntervalSec int    `json:"sync_interval_seconds"`
 	} `json:"time"`
 	Queue struct {
-		RetentionDays int `json:"retention_days"`
+		MaxRows int `json:"max_rows"`
+		// EvictBatchSize is how many oldest non-critical rows each eviction
+		// pass removes once max_rows is exceeded (queue.RunMaxRowsSweeper) -
+		// shared with the disk-percent sweeper. Must be large enough that
+		// eviction throughput (EvictBatchSize / max_rows_sweep_interval_seconds,
+		// the latter file-only) keeps pace with real acquisition write rate,
+		// or the queue keeps growing past max_rows regardless of eviction
+		// running correctly (found live 2026-09-09, see MEMORY.md).
+		EvictBatchSize int `json:"evict_batch_size"`
 	} `json:"queue"`
 	// StoreForward is the master switch for the whole pipeline (see
 	// config.StoreForwardConfig) - when Enabled is false, the gateway only
@@ -181,7 +189,8 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	dto.Time.NTPServer = s.cfg.Time.NTPServer
 	dto.Time.Timezone = s.cfg.Time.Timezone
 	dto.Time.SyncIntervalSec = s.cfg.Time.SyncIntervalSec
-	dto.Queue.RetentionDays = s.cfg.Queue.RetentionDays
+	dto.Queue.MaxRows = s.cfg.Queue.MaxRows
+	dto.Queue.EvictBatchSize = s.cfg.Queue.EvictBatchSize
 	dto.StoreForward.Enabled = !s.cfg.StoreForward.Disabled
 	writeJSON(w, http.StatusOK, dto)
 }
@@ -281,8 +290,11 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if dto.Time.SyncIntervalSec > 0 {
 		s.cfg.Time.SyncIntervalSec = dto.Time.SyncIntervalSec
 	}
-	if dto.Queue.RetentionDays > 0 {
-		s.cfg.Queue.RetentionDays = dto.Queue.RetentionDays
+	if dto.Queue.MaxRows > 0 {
+		s.cfg.Queue.MaxRows = dto.Queue.MaxRows
+	}
+	if dto.Queue.EvictBatchSize > 0 {
+		s.cfg.Queue.EvictBatchSize = dto.Queue.EvictBatchSize
 	}
 
 	if s.configPath == "" {

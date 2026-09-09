@@ -9,8 +9,8 @@ database:
   path: "./data/gateway.db"
 
 queue:
-  retention_days: 30
-  sweep_interval_minutes: 60
+  max_rows: 500000 # cap on data_queue itself; oldest non-critical rows are evicted first once exceeded
+  max_rows_sweep_interval_seconds: 60
   storage_full_percent: 95
   storage_sweep_interval_seconds: 60
   evict_batch_size: 100

@@ -99,9 +99,11 @@ export interface StoreForwardStatus {
   server_connected: boolean
   server_last_error?: string
   server_last_sent_at?: string
-  // Optional: a gateway build from before this field existed won't send it
-  // (the Web UI hot-reloads independently of the Go binary here).
-  retention_days?: number
+  // Optional: a gateway build from before these fields existed won't send
+  // them (the Web UI hot-reloads independently of the Go binary here).
+  total_rows?: number
+  max_rows?: number
+  write_rate_per_sec?: number
 }
 
 export interface TimeStatus {
@@ -123,6 +125,7 @@ export interface Diagnostics {
   timeout_count: number
   crc_error_count: number
   retry_count: number
+  write_rate_per_sec: number
 }
 
 export interface LogEntry {
@@ -177,7 +180,8 @@ export interface Settings {
   // existed (a real possibility here — the Web UI hot-reloads on `git pull`
   // independently of the Go binary, which needs a manual rebuild+swap).
   queue?: {
-    retention_days: number
+    max_rows: number
+    evict_batch_size: number
   }
   // Optional: absent when talking to a gateway build from before this field
   // existed. Defaults to true (enabled) when missing.

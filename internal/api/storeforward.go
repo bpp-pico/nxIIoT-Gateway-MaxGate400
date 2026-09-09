@@ -1,12 +1,33 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"nxiiot-gateway/internal/queue"
 	"nxiiot-gateway/internal/storage"
 )
+
+// writeRateWindow is the lookback window queueWriteRatePerSec averages
+// over — short enough to reflect the current polling cadence, long enough
+// to not be noisy tick-to-tick.
+const writeRateWindow = 30 * time.Second
+
+// queueWriteRatePerSec estimates the live data_queue insert rate
+// (rows/sec) so operators can compare it against eviction capacity
+// (queue.evict_batch_size / queue.max_rows_sweep_interval_seconds) —
+// found necessary live on 2026-09-09 when a low evict_batch_size couldn't
+// keep pace with real acquisition throughput and the queue kept growing
+// past max_rows regardless of eviction running correctly. Shared by the
+// Store & Forward status and Diagnostics endpoints.
+func (s *Server) queueWriteRatePerSec(ctx context.Context) (float64, error) {
+	n, err := s.queueRepo.CountInsertedSince(ctx, time.Now().Add(-writeRateWindow))
+	if err != nil {
+		return 0, err
+	}
+	return float64(n) / writeRateWindow.Seconds(), nil
+}
 
 // storeForwardStatusDTO matches §16's Store & Forward panel fields.
 type storeForwardStatusDTO struct {
@@ -20,7 +41,9 @@ type storeForwardStatusDTO struct {
 	ServerConnected    bool       `json:"server_connected"`
 	ServerLastError    string     `json:"server_last_error,omitempty"`
 	ServerLastSentAt   *time.Time `json:"server_last_sent_at,omitempty"`
-	RetentionDays      int        `json:"retention_days"`
+	TotalRows          int64      `json:"total_rows"`
+	MaxRows            int        `json:"max_rows"`
+	WriteRatePerSec    float64    `json:"write_rate_per_sec"`
 }
 
 func (s *Server) getStoreForwardStatus(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +59,14 @@ func (s *Server) getStoreForwardStatus(w http.ResponseWriter, r *http.Request) {
 		OldestPending:  stats.OldestPending,
 		NewestPending:  stats.NewestPending,
 		RetryCount:     stats.TotalRetries,
-		RetentionDays:  s.cfg.Queue.RetentionDays,
+		TotalRows:      stats.TotalCount,
+		MaxRows:        s.cfg.Queue.MaxRows,
+	}
+
+	if rate, err := s.queueWriteRatePerSec(r.Context()); err == nil {
+		dto.WriteRatePerSec = rate
+	} else {
+		s.log.Warn("failed to compute queue write rate", "error", err)
 	}
 
 	if pct, err := storage.DiskUsagePercent(s.cfg.Database.Path); err == nil {

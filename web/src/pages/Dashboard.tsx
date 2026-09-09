@@ -21,6 +21,31 @@ function fmtBytes(v?: number) {
   return `${n.toFixed(1)} ${units[i]}`
 }
 
+// timeUntilEvictionSeconds estimates, at the current write rate, how long
+// until total_rows reaches max_rows and RunMaxRowsSweeper starts deleting
+// the oldest non-critical rows to make room. Acquisition always writes to
+// data_queue regardless of server connectivity (Rule 1 - see HANDOFF.md),
+// so this holds whether the server is currently reachable or not: it's
+// the answer to "if we lost the connection right now, how long before the
+// oldest not-yet-sent data is at risk of being evicted."
+function timeUntilEvictionSeconds(totalRows?: number, maxRows?: number, writeRatePerSec?: number): number | null {
+  if (totalRows == null || maxRows == null || writeRatePerSec == null || writeRatePerSec <= 0) return null
+  const rowsRemaining = maxRows - totalRows
+  if (rowsRemaining <= 0) return 0
+  return rowsRemaining / writeRatePerSec
+}
+
+function fmtDuration(seconds: number | null): string {
+  if (seconds === null) return '—'
+  if (seconds <= 0) return 'now'
+  if (seconds < 60) return `${seconds.toFixed(0)}s`
+  const minutes = seconds / 60
+  if (minutes < 60) return `${minutes.toFixed(0)}m`
+  const hours = minutes / 60
+  if (hours < 48) return `${hours.toFixed(1)}h`
+  return `${(hours / 24).toFixed(1)}d`
+}
+
 function timeQualityBadgeStyle(quality?: string) {
   if (quality === 'SYNCED') return styles.badgeGood
   if (quality === 'RTC' || quality === 'UNSYNCED') return styles.badgeNeutral
@@ -166,9 +191,33 @@ export function Dashboard() {
 
         <div style={styles.card}>
           <div style={styles.cardIcon}><Icon name="clock" /></div>
-          <div style={styles.cardTitle}>Retention Period</div>
-          <div style={styles.cardValue}>{storeForward.retention_days != null ? `${storeForward.retention_days} days` : '—'}</div>
-          <div style={styles.cardSub}>how long sent records are kept</div>
+          <div style={styles.cardTitle}>Queue Size</div>
+          <div style={styles.cardValue}>
+            {storeForward.total_rows != null ? fmtNum(storeForward.total_rows) : '—'}
+            {storeForward.max_rows != null ? ` / ${fmtNum(storeForward.max_rows)}` : ''}
+          </div>
+          <div style={styles.cardSub}>oldest non-critical records are evicted once max rows is exceeded</div>
+        </div>
+
+        <div style={styles.card}>
+          <div style={styles.cardIcon}><Icon name="activity" /></div>
+          <div style={styles.cardTitle}>Queue Write Rate</div>
+          <div style={styles.cardValue}>
+            {storeForward.write_rate_per_sec != null ? `${storeForward.write_rate_per_sec.toFixed(1)} rows/s` : '—'}
+          </div>
+          <div style={styles.cardSub}>must stay below eviction capacity for Queue Size to stay bounded</div>
+        </div>
+
+        <div style={styles.card}>
+          <div style={styles.cardIcon}><Icon name="timeout" /></div>
+          <div style={styles.cardTitle}>Est. Time Until Eviction</div>
+          <div style={styles.cardValue}>
+            {fmtDuration(timeUntilEvictionSeconds(storeForward.total_rows, storeForward.max_rows, storeForward.write_rate_per_sec))}
+          </div>
+          <div style={styles.cardSub}>
+            at the current write rate, how long until Queue Size hits Max Rows and the oldest not-yet-sent data is
+            at risk of being overwritten if the server stays unreachable
+          </div>
         </div>
 
         <div style={styles.card}>

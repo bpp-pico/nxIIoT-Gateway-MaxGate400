@@ -82,9 +82,10 @@ func main() {
 	}
 	proc := processor.New(queueRepo, cfg.Gateway.ID, log)
 
-	go queue.RunRetentionSweeper(ctx, queueRepo,
-		time.Duration(cfg.Queue.RetentionDays)*24*time.Hour,
-		time.Duration(cfg.Queue.SweepInterval)*time.Minute,
+	go queue.RunMaxRowsSweeper(ctx, queueRepo,
+		cfg.Queue.MaxRows,
+		cfg.Queue.EvictBatchSize,
+		time.Duration(cfg.Queue.MaxRowsSweepInterval)*time.Second,
 		log)
 
 	go queue.RunStoragePressureSweeper(ctx, queueRepo,

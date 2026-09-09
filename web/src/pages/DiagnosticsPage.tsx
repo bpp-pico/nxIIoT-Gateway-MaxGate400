@@ -64,6 +64,11 @@ export function DiagnosticsPage() {
             <div style={styles.cardTitle}>Retry Count</div>
             <div style={styles.cardValue}>{fmtNum(diag.retry_count)}</div>
           </div>
+          <div style={styles.card}>
+            <div style={styles.cardIcon}><Icon name="queue" /></div>
+            <div style={styles.cardTitle}>Queue Write Rate</div>
+            <div style={styles.cardValue}>{diag.write_rate_per_sec.toFixed(1)} rows/s</div>
+          </div>
         </div>
       )}
     </div>
