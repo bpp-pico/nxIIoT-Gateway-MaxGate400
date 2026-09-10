@@ -22,15 +22,44 @@ function fmtBytes(v?: number) {
 }
 
 // timeUntilEvictionSeconds estimates, at the current write rate, how long
-// until total_rows reaches max_rows and RunMaxRowsSweeper starts deleting
-// the oldest non-critical rows to make room. Acquisition always writes to
-// data_queue regardless of server connectivity (Rule 1 - see HANDOFF.md),
-// so this holds whether the server is currently reachable or not: it's
-// the answer to "if we lost the connection right now, how long before the
-// oldest not-yet-sent data is at risk of being evicted."
-function timeUntilEvictionSeconds(totalRows?: number, maxRows?: number, writeRatePerSec?: number): number | null {
-  if (totalRows == null || maxRows == null || writeRatePerSec == null || writeRatePerSec <= 0) return null
-  const rowsRemaining = maxRows - totalRows
+// until eviction is forced to start deleting not-yet-sent (PENDING/
+// SENDING) rows rather than already-SENT ones. Acquisition always writes
+// to data_queue regardless of server connectivity (Rule 1 - see
+// HANDOFF.md), so this holds whether the server is currently reachable or
+// not: it's the answer to "if we lost the connection right now, how long
+// before undelivered data is actually at risk."
+//
+// Deliberately NOT (max_rows - total_rows) / write_rate - that measures
+// time until the *next eviction tick*, not time until real data loss.
+// Once RunMaxRowsSweeper is keeping total_rows hovering near max_rows (its
+// intended steady state), that number is small essentially all the time
+// even though the server is connected and every evicted row is already-
+// SENT and safe to lose - a false alarm found live on 2026-09-10.
+//
+// The correct budget doesn't depend on total_rows at all: SENT rows are
+// evicted before PENDING/SENDING ones (oldest-non-critical-first already
+// prefers whatever isn't still needed), so the number of *new* rows that
+// can arrive before eviction is forced into PENDING/SENDING data is
+// max_rows - currently-undelivered-rows, regardless of how much SENT
+// buffer currently exists - that buffer is fully counted, implicitly, by
+// not subtracting total_rows.
+//
+// Caveat: this assumes SENT rows are evicted before PENDING/SENDING ones
+// in practice. Eviction order is actually priority-tier first (LOW before
+// NORMAL before HIGH) and oldest-within-tier second, regardless of
+// status - so if PENDING data is concentrated in a lower priority tier
+// than old SENT data, eviction could reach a PENDING row earlier than
+// this estimate implies. Still far more accurate than measuring against
+// total_rows.
+function timeUntilEvictionSeconds(
+  maxRows?: number,
+  pendingRecords?: number,
+  sendingRecords?: number,
+  writeRatePerSec?: number,
+): number | null {
+  if (maxRows == null || pendingRecords == null || sendingRecords == null || writeRatePerSec == null || writeRatePerSec <= 0)
+    return null
+  const rowsRemaining = maxRows - pendingRecords - sendingRecords
   if (rowsRemaining <= 0) return 0
   return rowsRemaining / writeRatePerSec
 }
@@ -210,13 +239,20 @@ export function Dashboard() {
 
         <div style={styles.card}>
           <div style={styles.cardIcon}><Icon name="timeout" /></div>
-          <div style={styles.cardTitle}>Est. Time Until Eviction</div>
+          <div style={styles.cardTitle}>Est. Time Until Data Loss Risk</div>
           <div style={styles.cardValue}>
-            {fmtDuration(timeUntilEvictionSeconds(storeForward.total_rows, storeForward.max_rows, storeForward.write_rate_per_sec))}
+            {fmtDuration(
+              timeUntilEvictionSeconds(
+                storeForward.max_rows,
+                storeForward.pending_records,
+                storeForward.sending_records,
+                storeForward.write_rate_per_sec,
+              ),
+            )}
           </div>
           <div style={styles.cardSub}>
-            at the current write rate, how long until Queue Size hits Max Rows and the oldest not-yet-sent data is
-            at risk of being overwritten if the server stays unreachable
+            if the server stays unreachable starting now, how long until not-yet-sent data is actually at risk of
+            being overwritten (not just when Queue Size next evicts already-sent records)
           </div>
         </div>
 
