@@ -1,0 +1,12 @@
+-- The live write-rate metric added 2026-09-09 (internal/queue/queue.go's
+-- CountInsertedSince, "SELECT COUNT(*) FROM data_queue WHERE
+-- event_timestamp >= ?") had no supporting index -- data_queue's only
+-- indexes are (gateway_id, sequence_id) and (status, next_attempt_at),
+-- neither of which helps a plain event_timestamp range predicate. Found
+-- live on the real MaxGate400 device 2026-09-10: at ~730k rows, every
+-- Dashboard/Diagnostics poll (3-5s cadence) triggered a full table scan,
+-- pinning CPU at 87% and starving everything else sharing the DB
+-- connection pool -- including acquisition itself (Modbus poll cycles
+-- degraded from <200ms to 18+ seconds) and the max_rows eviction
+-- sweeper's own Stats() check. See MEMORY.md for the full incident.
+CREATE INDEX IF NOT EXISTS idx_data_queue_event_timestamp ON data_queue(event_timestamp);

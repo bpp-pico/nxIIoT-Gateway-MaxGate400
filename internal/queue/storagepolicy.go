@@ -6,29 +6,52 @@ import (
 	"time"
 )
 
+// evictPriorityOrder is LOW-first, HIGH-last — "protect higher priority
+// data first" (§17). CRITICAL is never included; callers only ever try
+// LOW/NORMAL/HIGH.
+var evictPriorityOrder = [...]string{"LOW", "NORMAL", "HIGH"}
+
 // EvictOldestNonCritical deletes up to limit rows to relieve storage
 // pressure (§17 "Storage Full Action", default policy "Delete Oldest
 // Non-Critical Data"). CRITICAL rows are never touched. Among the rest,
-// LOW priority is evicted first, then NORMAL, then HIGH — "protect higher
-// priority data first" — and within a priority tier, oldest first.
+// LOW priority is evicted first, then NORMAL, then HIGH, and within a
+// priority tier, oldest first.
+//
+// Runs as up to 3 separate DELETEs (one per tier) rather than a single
+// query ordering by a computed CASE-priority expression, so each one can
+// use a plain index on (priority, event_timestamp) instead of a full
+// table sort. Found live on 2026-09-10: the original single-query form
+// had no supporting index at all, and a large eviction (needed to close
+// a big overshoot — see maxrows.go) took long enough to hold a write
+// lock that produced real SQLITE_BUSY failures elsewhere (acquisition
+// inserts, forwarder fetches) — see MEMORY.md. Splitting by tier also
+// bounds each individual DELETE's own cost, independent of that fix.
 func (r *Repository) EvictOldestNonCritical(ctx context.Context, limit int) (int64, error) {
-	res, err := r.db.ExecContext(ctx, `
-		DELETE FROM data_queue
-		WHERE id IN (
-			SELECT id FROM data_queue
-			WHERE priority != 'CRITICAL'
-			ORDER BY CASE priority
-				WHEN 'LOW' THEN 0
-				WHEN 'NORMAL' THEN 1
-				WHEN 'HIGH' THEN 2
-				ELSE 3 END,
-				event_timestamp ASC
-			LIMIT ?
-		)`, limit)
-	if err != nil {
-		return 0, err
+	var total int64
+	remaining := limit
+	for _, priority := range evictPriorityOrder {
+		if remaining <= 0 {
+			break
+		}
+		res, err := r.db.ExecContext(ctx, `
+			DELETE FROM data_queue
+			WHERE id IN (
+				SELECT id FROM data_queue
+				WHERE priority = ?
+				ORDER BY event_timestamp ASC
+				LIMIT ?
+			)`, priority, remaining)
+		if err != nil {
+			return total, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += n
+		remaining -= int(n)
 	}
-	return res.RowsAffected()
+	return total, nil
 }
 
 // DiskUsageFunc reports used disk space as a percentage (0-100) of the
