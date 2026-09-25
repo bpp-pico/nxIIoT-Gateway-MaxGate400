@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -42,6 +43,12 @@ type Server struct {
 	diag          *diagnostics.Store
 	logBuf        *logger.RingBuffer
 	netSvc        *netconfig.Service
+
+	// statsCache holds the last queue.Repository.Stats() result for
+	// getStoreForwardStatus — see statsCacheTTL in storeforward.go for why.
+	statsCacheMu sync.Mutex
+	statsCache   queue.Stats
+	statsCacheAt time.Time
 }
 
 func NewRouter(cfg *config.Config, configPath string, db *sql.DB, log *slog.Logger, statusStore *status.Store, latestStore *acquisition.LatestStore, manager *acquisition.Manager, queueRepo *queue.Repository, fwd *forwarder.Forwarder, timeSvc *timeservice.Service, diag *diagnostics.Store, logBuf *logger.RingBuffer, netSvc *netconfig.Service) http.Handler {

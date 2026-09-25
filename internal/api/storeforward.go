@@ -9,6 +9,42 @@ import (
 	"nxiiot-gateway/internal/storage"
 )
 
+// statsCacheTTL bounds how often getStoreForwardStatus re-runs
+// queue.Repository.Stats(). That query has no WHERE clause (it needs a true
+// total across all statuses in one pass) so no index can make it cheap —
+// at production row counts (600k+ rows) a single call took 6-7s. The
+// Store & Forward and Dashboard pages both poll this endpoint (every 3s and
+// 5s respectively) without waiting for the previous request to finish, so
+// once the query got slower than the poll interval, requests piled up
+// without bound, pinned the CPU, and starved the MQTT client's own
+// keepalive handling — the 2026-09-10 "connection lost" incident. Caching
+// here (rather than inside Stats() itself) keeps the maxrows eviction
+// sweeper's own Stats() calls always fresh, since it depends on an
+// up-to-date count to decide how much to evict.
+const statsCacheTTL = 5 * time.Second
+
+// cachedQueueStats returns queue.Repository.Stats(), reusing the last
+// result if it's within statsCacheTTL. Holding the lock across a cache-miss
+// query is deliberate: it coalesces concurrent callers into a single
+// underlying query instead of letting them all run the expensive scan in
+// parallel.
+func (s *Server) cachedQueueStats(ctx context.Context) (queue.Stats, error) {
+	s.statsCacheMu.Lock()
+	defer s.statsCacheMu.Unlock()
+
+	if time.Since(s.statsCacheAt) < statsCacheTTL {
+		return s.statsCache, nil
+	}
+
+	stats, err := s.queueRepo.Stats(ctx)
+	if err != nil {
+		return queue.Stats{}, err
+	}
+	s.statsCache = stats
+	s.statsCacheAt = time.Now()
+	return stats, nil
+}
+
 // writeRateWindow is the lookback window queueWriteRatePerSec averages
 // over — short enough to reflect the current polling cadence, long enough
 // to not be noisy tick-to-tick.
@@ -47,7 +83,7 @@ type storeForwardStatusDTO struct {
 }
 
 func (s *Server) getStoreForwardStatus(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.queueRepo.Stats(r.Context())
+	stats, err := s.cachedQueueStats(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

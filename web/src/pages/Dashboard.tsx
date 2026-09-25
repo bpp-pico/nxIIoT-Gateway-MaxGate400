@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { styles } from '../styles'
 import { Icon } from '../icons'
@@ -87,9 +87,12 @@ export function Dashboard() {
   const [storeForward, setStoreForward] = useState<StoreForwardStatus | null>(null)
   const [time, setTime] = useState<TimeStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const loading = useRef(false)
 
   useEffect(() => {
     const load = () => {
+      if (loading.current) return
+      loading.current = true
       Promise.all([api.getSystem(), api.getDashboardSummary(), api.getStoreForwardStatus(), api.getTime()])
         .then(([sys, sum, sf, t]) => {
           setSystem(sys)
@@ -99,6 +102,9 @@ export function Dashboard() {
           setError(null)
         })
         .catch((err) => setError(String(err instanceof Error ? err.message : err)))
+        .finally(() => {
+          loading.current = false
+        })
     }
 
     load()
